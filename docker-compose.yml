@@ -1,0 +1,208 @@
+# =============================================================================
+# Cortex — docker-compose.yml
+# =============================================================================
+# Full local development / staging stack:
+#   cortex-grpc   — gRPC certification server
+#   cortex-http   — HTTP REST server
+#   redis         — L1 memory cache
+#   prometheus    — metrics scraping
+#   grafana       — dashboard (open http://localhost:3000, admin/admin)
+#
+# Quick start:
+#   cp .env.example .env          # edit your API keys
+#   docker-compose up -d
+#   cortex-health --server grpc://localhost:50051
+#
+# With a custom cortex.yaml:
+#   CORTEX_CONFIG_FILE=./my-config.yaml docker-compose up -d
+# =============================================================================
+
+version: "3.9"
+
+# ── Shared configuration ───────────────────────────────────────────────────────
+x-cortex-env: &cortex-env
+  CORTEX_SERVER_LOG_FORMAT:    json
+  CORTEX_SERVER_LOG_LEVEL:     INFO
+  CORTEX_REDIS_ENABLED:        "true"
+  CORTEX_REDIS_URL:            redis://redis:6379
+  CORTEX_METRICS_ENABLED:      "true"
+  CORTEX_METRICS_PORT:         "9090"
+  # Override in .env or environment:
+  CORTEX_SERVER_PLATFORM_ID:   ${CORTEX_SERVER_PLATFORM_ID:-dev}
+  CORTEX_SERVER_DEPLOYMENT_ID: ${CORTEX_SERVER_DEPLOYMENT_ID:-local}
+  CORTEX_API_KEYS:             ${CORTEX_API_KEYS:-}
+  CORTEX_SKIP_AUTH:            ${CORTEX_SKIP_AUTH:-1}   # disable auth in local dev
+  # OpenTelemetry — traces sent to OTel collector
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_SERVICE_NAME:           cortex
+  OTEL_TRACES_EXPORTER:        otlp
+
+x-cortex-base: &cortex-base
+  image: cortex:latest
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      EXTRAS: "grpc,redis,http,metrics"
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+  networks:
+    - cortex-net
+  volumes:
+    - cortex-memory:/var/cortex/memory
+    # Uncomment to mount a config file:
+    # - ./cortex.yaml:/etc/cortex/cortex.yaml:ro
+    # Uncomment to mount TLS certificates:
+    # - ./certs:/var/cortex/certs:ro
+
+
+services:
+
+  # ── gRPC certification server ───────────────────────────────────────────────
+  cortex-grpc:
+    <<: *cortex-base
+    container_name: cortex-grpc
+    command: cortex-serve
+    environment:
+      <<: *cortex-env
+      CORTEX_GRPC_ENABLED:  "true"
+      CORTEX_GRPC_PORT:     "50051"
+      CORTEX_HTTP_ENABLED:  "false"
+    ports:
+      - "50051:50051"   # gRPC
+      - "9091:9090"     # Prometheus metrics
+    healthcheck:
+      test: ["CMD", "cortex-health", "--json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── HTTP REST server ────────────────────────────────────────────────────────
+  cortex-http:
+    <<: *cortex-base
+    container_name: cortex-http
+    command: cortex-serve-http
+    environment:
+      <<: *cortex-env
+      CORTEX_HTTP_ENABLED:  "true"
+      CORTEX_HTTP_PORT:     "8765"
+      CORTEX_GRPC_ENABLED:  "false"
+    ports:
+      - "8765:8765"     # HTTP REST
+      - "9092:9090"     # Prometheus metrics
+    healthcheck:
+      test: ["CMD", "cortex-health", "--server", "http://localhost:8765", "--json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Redis — L1 memory cache ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: cortex-redis
+    restart: unless-stopped
+    networks:
+      - cortex-net
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel warning
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "6379:6379"   # expose for local debugging; remove in production
+
+  # ── Prometheus ──────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cortex-prometheus
+    restart: unless-stopped
+    networks:
+      - cortex-net
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "9093:9090"
+    depends_on:
+      - cortex-grpc
+      - cortex-http
+
+  # ── OpenTelemetry Collector ─────────────────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: cortex-otel-collector
+    restart: unless-stopped
+    networks:
+      - cortex-net
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # Collector self-metrics
+    depends_on:
+      - jaeger
+
+  # ── Jaeger (distributed tracing UI) ─────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: cortex-jaeger
+    restart: unless-stopped
+    networks:
+      - cortex-net
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14250:14250"  # gRPC for model.proto
+
+  # ── Grafana ─────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cortex-grafana
+    restart: unless-stopped
+    networks:
+      - cortex-net
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP:     "false"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  cortex-net:
+    driver: bridge
+    name: cortex-net
+
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  cortex-memory:   {}
+  redis-data:      {}
+  prometheus-data: {}
+  grafana-data:    {}
+  grafana-data:    {}

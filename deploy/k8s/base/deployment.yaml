@@ -1,0 +1,148 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cortex-grpc
+  namespace: cortex
+  labels:
+    app.kubernetes.io/name: cortex
+    app.kubernetes.io/component: grpc-server
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  # Start with 2 replicas — scale via HPA in production
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cortex-grpc
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0          # zero-downtime rollout
+  template:
+    metadata:
+      labels:
+        app: cortex-grpc
+        app.kubernetes.io/name: cortex
+        app.kubernetes.io/component: grpc-server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "9090"
+        prometheus.io/path:   "/metrics"
+    spec:
+      # ── Security context ──────────────────────────────────────────────────
+      securityContext:
+        runAsNonRoot: true
+        runAsUser:    1000        # matches the cortex user in Dockerfile
+        runAsGroup:   1000
+        fsGroup:      1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # ── Service account ───────────────────────────────────────────────────
+      serviceAccountName: cortex
+
+      # ── Graceful termination ──────────────────────────────────────────────
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: cortex-grpc
+          image: cortex:latest             # override per overlay
+          imagePullPolicy: IfNotPresent
+          command: ["cortex-serve"]
+
+          # ── Ports ─────────────────────────────────────────────────────────
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+
+          # ── Environment — non-secret config from ConfigMap ────────────────
+          envFrom:
+            - configMapRef:
+                name: cortex-config
+            - secretRef:
+                name: cortex-secrets
+
+          # ── Per-pod identity ──────────────────────────────────────────────
+          env:
+            - name: CORTEX_SERVER_PLATFORM_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name  # pod name as platform ID
+
+          # ── Resource limits ───────────────────────────────────────────────
+          resources:
+            requests:
+              cpu:    "250m"
+              memory: "256Mi"
+            limits:
+              cpu:    "1000m"
+              memory: "512Mi"
+
+          # ── Health probes ─────────────────────────────────────────────────
+          # Startup: give the server 30s to initialise before liveness kicks in
+          startupProbe:
+            exec:
+              command: ["cortex-health", "--json"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6    # 30s total
+
+          # Liveness: restart pod if it becomes unhealthy
+          livenessProbe:
+            exec:
+              command: ["cortex-health", "--json"]
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 10
+
+          # Readiness: remove from service endpoints if not ready
+          readinessProbe:
+            exec:
+              command: ["cortex-health", "--json"]
+            periodSeconds: 10
+            failureThreshold: 2
+            timeoutSeconds: 5
+
+          # ── Security ──────────────────────────────────────────────────────
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem:   true
+            capabilities:
+              drop: ["ALL"]
+
+          # ── Volume mounts ─────────────────────────────────────────────────
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cortex-memory
+              mountPath: /var/cortex/memory
+            # Uncomment if using mTLS:
+            # - name: tls-certs
+            #   mountPath: /var/cortex/certs
+            #   readOnly: true
+
+      # ── Volumes ───────────────────────────────────────────────────────────
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cortex-memory
+          emptyDir: {}
+        # Uncomment if using mTLS:
+        # - name: tls-certs
+        #   secret:
+        #     secretName: cortex-tls-certs
+
+      # ── Pod scheduling ────────────────────────────────────────────────────
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: cortex-grpc
+                topologyKey: kubernetes.io/hostname

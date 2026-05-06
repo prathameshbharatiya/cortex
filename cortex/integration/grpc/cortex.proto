@@ -1,0 +1,180 @@
+syntax = "proto3";
+package cortex;
+
+message Vec3 { double x = 1; double y = 2; double z = 3; }
+message Quaternion { double w = 1; double x = 2; double y = 3; double z = 4; }
+message Pose { Vec3 position = 1; Quaternion orientation = 2; }
+
+message RobotStateProto {
+  Vec3            ee_position      = 1;
+  Quaternion      ee_orientation   = 2;
+  repeated double joint_positions  = 3;
+  repeated double joint_velocities = 4;
+  repeated double joint_torques    = 5;
+  bool            gripper_open     = 6;
+  double          gripper_force_n  = 7;
+  bool            emergency_stop   = 8;
+  bool            in_singularity   = 9;
+  double          timestamp        = 10;
+}
+
+message MemoryRecordProto {
+  string record_id         = 1;
+  string source            = 2;
+  string memory_type       = 3;
+  string content_json      = 4;
+  string content_text      = 5;
+  double valid_at          = 6;
+  double invalid_at        = 7;
+  double base_confidence   = 8;
+  string outcome_tag       = 9;
+  int32  outcome_count     = 10;
+  int32  success_count     = 11;
+  bool   is_sensor_anchored = 12;
+}
+
+message ActionProto {
+  string action_id      = 1;
+  string action_type    = 2;
+  Pose   target_pose    = 3;
+  double max_speed_ms   = 4;
+  double max_force_n    = 5;
+  double timeout_ms     = 6;
+  string source         = 7;
+  string intent         = 8;
+  double ai_confidence  = 9;
+  string payload_json   = 10;
+}
+
+message SafetyConstraintProto {
+  string constraint_id   = 1;
+  string description     = 2;
+  string constraint_type = 3;
+  string parameters_json = 4;
+  bool   veto_power      = 5;
+  string source          = 6;
+}
+
+message ValidationResultProto {
+  bool            passed        = 1;
+  double          score         = 2;
+  string          notes         = 3;
+  double          latency_ms    = 4;
+  repeated string failure_codes = 5;
+}
+
+message ConfidenceContractProto {
+  double          success_probability   = 1;
+  double          stability_margin      = 2;
+  string          worst_case_risk       = 3;
+  repeated string uncertainty_sources  = 4;
+  double          validity_window_ms    = 5;
+}
+
+message CertifyRequest {
+  ActionProto                    action            = 1;
+  string                         task              = 2;
+  RobotStateProto                robot_state       = 3;
+  repeated MemoryRecordProto     memory_records    = 4;
+  repeated SafetyConstraintProto extra_constraints = 5;
+  double                         confidence_floor  = 6;
+  bool                           skip_physics      = 7;
+  string                         deployment_id     = 8;
+}
+
+message CertifyResponse {
+  string                  decision_id        = 1;
+  string                  state              = 2;
+  ActionProto             certified_action   = 3;
+  ConfidenceContractProto confidence         = 4;
+  string                  reason             = 5;
+  ValidationResultProto   sentinel_result    = 6;
+  ValidationResultProto   physicore_result   = 7;
+  ValidationResultProto   memory_result      = 8;
+  double                  total_latency_ms   = 9;
+  string                  trace_id           = 10;
+  string                  ctx_id             = 11;
+  repeated string         failure_mode_codes = 12;
+  double                  timestamp          = 13;
+}
+
+message GetContextRequest {
+  string          task          = 1;
+  RobotStateProto robot_state   = 2;
+  int32           top_k         = 3;
+  bool            skip_physics  = 4;
+  string          deployment_id = 5;
+}
+
+message GetContextResponse {
+  string                         ctx_id             = 1;
+  string                         task               = 2;
+  repeated MemoryRecordProto     memory_records     = 3;
+  repeated SafetyConstraintProto constraints        = 4;
+  double                         memory_confidence  = 5;
+  double                         assembly_latency_ms = 6;
+  bool                           physics_feasible   = 7;
+  repeated string                warnings           = 8;
+}
+
+service CortexCertification {
+  rpc Certify     (CertifyRequest)    returns (CertifyResponse);
+  rpc GetContext  (GetContextRequest) returns (GetContextResponse);
+}
+
+message RetrieveRequest {
+  string          query_text       = 1;
+  string          query_type       = 2;
+  repeated string memory_types     = 3;
+  int32           top_k            = 4;
+  double          max_age_seconds  = 5;
+  double          min_confidence   = 6;
+  string          task             = 7;
+  string          deployment_id    = 8;
+}
+
+message RetrieveResponse {
+  repeated MemoryRecordProto records          = 1;
+  double                     total_latency_ms = 2;
+  repeated string            adapters_queried = 3;
+  int32                      deduplicated     = 4;
+}
+
+message StoreRequest  { MemoryRecordProto record = 1; string deployment_id = 2; }
+message StoreResponse { string record_id = 1; bool success = 2; double latency_ms = 3; string error = 4; }
+message DeleteRequest { string record_id = 1; string deployment_id = 2; }
+message DeleteResponse { bool deleted = 1; }
+
+service CortexMemory {
+  rpc Retrieve (RetrieveRequest)  returns (RetrieveResponse);
+  rpc Store    (StoreRequest)     returns (StoreResponse);
+  rpc Delete   (DeleteRequest)    returns (DeleteResponse);
+}
+
+message RecordOutcomeRequest {
+  string          decision_id          = 1;
+  string          trace_id             = 2;
+  string          ctx_id               = 3;
+  string          task                 = 4;
+  string          outcome_class        = 5;
+  string          description          = 6;
+  double          predicted_confidence = 7;
+  repeated string memory_record_ids   = 8;
+  string          deployment_id        = 9;
+  repeated double ee_position         = 10;
+}
+
+message RecordOutcomeResponse { string experience_id = 1; double surprise_score = 2; bool is_high_surprise = 3; }
+message OutcomeStatsRequest   { string task = 1; string deployment_id = 2; }
+message OutcomeStatsResponse  { int32 total = 1; int32 success_count = 2; int32 failure_count = 3; double success_rate = 4; double avg_surprise = 5; int32 high_surprise = 6; }
+
+service CortexExperience {
+  rpc RecordOutcome   (RecordOutcomeRequest) returns (RecordOutcomeResponse);
+  rpc GetOutcomeStats (OutcomeStatsRequest)  returns (OutcomeStatsResponse);
+}
+
+message HealthRequest  { string deployment_id = 1; }
+message AdapterStatus  { string name = 1; string backend = 2; bool healthy = 3; bool enabled = 4; int32 reads = 5; int32 writes = 6; int32 errors = 7; }
+message HealthResponse { bool alive = 1; bool ready = 2; string version = 3; repeated AdapterStatus adapters = 4; int32 experience_count = 5; double uptime_seconds = 6; }
+
+service CortexHealth { rpc Check (HealthRequest) returns (HealthResponse); }

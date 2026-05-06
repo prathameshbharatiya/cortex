@@ -1,0 +1,53 @@
+# OpenTelemetry Collector configuration for Cortex
+# Receives OTLP traces from the Cortex server and exports to Jaeger.
+# Also exposes a /metrics endpoint for Prometheus to scrape.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  # Add cortex-specific attributes to every span
+  attributes:
+    actions:
+      - key: service.namespace
+        value: cortex
+        action: upsert
+
+exporters:
+  # Forward traces to Jaeger
+  otlp/jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+
+  # Expose collector's own metrics for Prometheus scraping
+  prometheus:
+    endpoint: "0.0.0.0:8888"
+    namespace: otelcol
+
+  # Debug logging (disable in production)
+  logging:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers:  [otlp]
+      processors: [memory_limiter, batch, attributes]
+      exporters:  [otlp/jaeger, logging]
+    metrics:
+      receivers:  [otlp]
+      processors: [memory_limiter, batch]
+      exporters:  [prometheus]

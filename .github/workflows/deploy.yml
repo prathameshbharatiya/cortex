@@ -1,0 +1,162 @@
+# =============================================================================
+# Deploy — build Docker image and deploy to Kubernetes
+# =============================================================================
+# Triggered by:
+#   - Push to main (deploys to staging)
+#   - Publishing a GitHub Release (deploys to production)
+#
+# Required repository secrets:
+#   REGISTRY_URL          — container registry URL (e.g. ghcr.io/your-org)
+#   REGISTRY_USERNAME     — registry username
+#   REGISTRY_PASSWORD     — registry password / token
+#   KUBE_CONFIG_STAGING   — base64-encoded kubeconfig for staging cluster
+#   KUBE_CONFIG_PROD      — base64-encoded kubeconfig for production cluster
+# =============================================================================
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY:    ${{ secrets.REGISTRY_URL || 'ghcr.io' }}
+  IMAGE_NAME:  cortex
+
+jobs:
+  # ── Build and push Docker image ───────────────────────────────────────────
+  build:
+    name: Build image
+    runs-on: ubuntu-latest
+    outputs:
+      image:  ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push:    true
+          tags:    ${{ steps.meta.outputs.tags }}
+          labels:  ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+          build-args: |
+            EXTRAS=grpc,redis,http,metrics
+
+  # ── Deploy to staging (on push to main) ──────────────────────────────────
+  deploy-staging:
+    name: Deploy to staging
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Deploy with Kustomize
+        run: |
+          IMAGE_TAG="sha-${GITHUB_SHA::7}"
+          cd deploy/k8s/overlays/staging
+          kustomize edit set image cortex:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}
+          kubectl apply -k .
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/cortex-grpc \
+            -n cortex --timeout=300s
+
+      - name: Run smoke test
+        run: |
+          kubectl run cortex-smoke-test \
+            --image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA::7} \
+            --restart=Never \
+            --rm \
+            --attach \
+            -n cortex \
+            -- cortex-health --server grpc://cortex-grpc:50051 --json
+
+  # ── Deploy to production (on release published) ───────────────────────────
+  deploy-production:
+    name: Deploy to production
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    if: github.event_name == 'release'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Deploy with Kustomize
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"   # strip leading v
+          cd deploy/k8s/overlays/production
+          kustomize edit set image cortex:latest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}
+          kubectl apply -k .
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/cortex-grpc \
+            -n cortex --timeout=600s
+
+      - name: Verify all replicas healthy
+        run: |
+          kubectl get deployment cortex-grpc -n cortex
+          READY=$(kubectl get deployment cortex-grpc -n cortex \
+            -o jsonpath='{.status.readyReplicas}')
+          DESIRED=$(kubectl get deployment cortex-grpc -n cortex \
+            -o jsonpath='{.spec.replicas}')
+          echo "Ready: ${READY}/${DESIRED}"
+          [ "${READY}" -eq "${DESIRED}" ] || exit 1

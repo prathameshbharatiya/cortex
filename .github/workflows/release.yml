@@ -1,0 +1,178 @@
+# =============================================================================
+# Release — publish cortex-gate to PyPI
+# =============================================================================
+# Triggered by pushing a version tag: git tag v0.1.0 && git push --tags
+#
+# Process:
+#   1. Verify the tag matches the version in cortex/_version.py
+#   2. Run the full test suite (no shortcuts on release)
+#   3. Build wheel + sdist
+#   4. Check the distribution with twine
+#   5. Publish to PyPI via OIDC (no API key stored in secrets)
+#   6. Create a GitHub Release with the CHANGELOG entry
+#
+# Required repository settings:
+#   Settings → Environments → pypi → trusted publisher configured at pypi.org
+# =============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"       # stable:  v0.1.0
+      - "v[0-9]+.[0-9]+.[0-9]+a[0-9]+" # alpha:   v0.1.0a1
+      - "v[0-9]+.[0-9]+.[0-9]+b[0-9]+" # beta:    v0.1.0b1
+      - "v[0-9]+.[0-9]+.[0-9]+rc[0-9]+" # rc:     v0.1.0rc1
+
+permissions:
+  contents: write   # create GitHub Release
+  id-token: write   # OIDC token for PyPI trusted publishing
+
+jobs:
+  # ── Verify tag ────────────────────────────────────────────────────────────
+  verify:
+    name: Verify version consistency
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Tag version: $TAG"
+
+      - name: Verify _version.py matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          FILE_VERSION=$(python -c "from cortex._version import __version__; print(__version__)")
+          echo "Tag:  $TAG_VERSION"
+          echo "File: $FILE_VERSION"
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "ERROR: Tag v$TAG_VERSION does not match cortex/_version.py ($FILE_VERSION)"
+            echo "Fix: update cortex/_version.py before tagging."
+            exit 1
+          fi
+
+      - name: Verify pyproject.toml matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          TOML_VERSION=$(python -c "
+          import tomllib
+          with open('pyproject.toml', 'rb') as f:
+              d = tomllib.load(f)
+          print(d['project']['version'])
+          ")
+          echo "Tag:  $TAG_VERSION"
+          echo "TOML: $TOML_VERSION"
+          if [ "$TAG_VERSION" != "$TOML_VERSION" ]; then
+            echo "ERROR: Tag v$TAG_VERSION does not match pyproject.toml ($TOML_VERSION)"
+            exit 1
+          fi
+
+  # ── Full test suite ───────────────────────────────────────────────────────
+  test:
+    name: Test before release
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install with all extras
+        run: pip install -e ".[dev,grpc,redis,http]"
+
+      - name: Run tests
+        run: pytest tests/unit -m "not integration and not ros2" --timeout=30 -v
+
+  # ── Build ─────────────────────────────────────────────────────────────────
+  build:
+    name: Build distribution
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build
+        run: python -m build
+
+      - name: Verify distribution integrity
+        run: twine check --strict dist/*
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # ── Publish to PyPI ───────────────────────────────────────────────────────
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI (OIDC — no API key required)
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  # ── GitHub Release ────────────────────────────────────────────────────────
+  github-release:
+    name: Create GitHub Release
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Extract changelog entry for this version
+        id: changelog
+        run: |
+          VERSION="${{ needs.verify.outputs.version }}"
+          # Extract the section for this version from CHANGELOG.md
+          ENTRY=$(awk "/^## \[$VERSION\]/,/^## \[/" CHANGELOG.md | head -n -1)
+          echo "entry<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$ENTRY" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "cortex-gate v${{ needs.verify.outputs.version }}"
+          body: ${{ steps.changelog.outputs.entry }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'a') || contains(github.ref_name, 'b') || contains(github.ref_name, 'rc') }}
+          files: dist/*
+          fail_on_unmatched_files: true

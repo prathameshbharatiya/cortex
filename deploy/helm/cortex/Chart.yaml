@@ -1,0 +1,26 @@
+apiVersion: v2
+name: cortex
+description: Context Certification Infrastructure for Physical AI
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+keywords:
+  - robotics
+  - physical-ai
+  - safety
+  - certification
+  - grpc
+
+home: https://github.com/cortex-ai/cortex
+sources:
+  - https://github.com/cortex-ai/cortex
+
+maintainers:
+  - name: Cortex Team
+
+dependencies:
+  - name: redis
+    version: "19.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled

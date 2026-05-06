@@ -1,0 +1,21 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: cortex-grpc
+    static_configs:
+      - targets: ["cortex-grpc:9090"]
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  - job_name: cortex-http
+    static_configs:
+      - targets: ["cortex-http:9090"]
+    metrics_path: /metrics
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis:6379"]

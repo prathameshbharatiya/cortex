@@ -1,0 +1,165 @@
+# =============================================================================
+# CI — Cortex continuous integration
+# =============================================================================
+# Runs on every push to main and every pull request.
+# Jobs:
+#   lint     — ruff check + format
+#   typecheck — mypy strict
+#   test     — pytest across Python 3.10 / 3.11 / 3.12
+#   build    — verify the wheel and sdist build cleanly
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  # ── Lint ──────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff>=0.4.0
+
+      - name: Check lint
+        run: ruff check .
+
+      - name: Check format
+        run: ruff format --check .
+
+  # ── Type check ────────────────────────────────────────────────────────────
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install with dev extras
+        run: pip install -e ".[dev,grpc,redis,http]"
+
+      - name: Run mypy
+        run: mypy cortex --ignore-missing-imports
+
+  # ── Tests ─────────────────────────────────────────────────────────────────
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package + dev deps
+        run: pip install -e ".[dev,grpc,redis,http]"
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit \
+            -m "not integration and not ros2" \
+            --cov=cortex \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --timeout=30 \
+            -v
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: matrix.python-version == '3.11'
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
+  # ── Build ─────────────────────────────────────────────────────────────────
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Check distribution
+        run: twine check dist/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+          retention-days: 7
+
+  # ── Integration (optional, on-demand) ────────────────────────────────────
+  integration:
+    name: Integration tests (Redis)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install with redis extra
+        run: pip install -e ".[dev,redis]"
+
+      - name: Run integration tests
+        env:
+          CORTEX_REDIS_URL: redis://localhost:6379
+        run: pytest tests/ -m integration --timeout=60 -v

@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cortex
+
+bases:
+  - ../../base
+
+images:
+  - name: cortex:latest
+    newName: your-registry.io/cortex
+    newTag:  "latest"
+
+patches:
+  # 1 replica is fine in staging
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cortex-grpc
+        namespace: cortex
+      spec:
+        replicas: 1
+    target:
+      kind: Deployment
+      name: cortex-grpc
+
+configMapGenerator:
+  - name: cortex-config
+    behavior: merge
+    literals:
+      - CORTEX_SERVER_DEPLOYMENT_ID=staging
+      - CORTEX_SERVER_LOG_LEVEL=DEBUG
+      - CORTEX_SKIP_AUTH=0
+      - CORTEX_AUTH_REQUIRED=1

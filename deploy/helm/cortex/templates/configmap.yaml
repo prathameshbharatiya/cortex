@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cortex.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cortex.labels" . | nindent 4 }}
+data:
+  CORTEX_SERVER_LOG_FORMAT:    {{ .Values.server.logFormat | quote }}
+  CORTEX_SERVER_LOG_LEVEL:     {{ .Values.server.logLevel  | quote }}
+  CORTEX_SERVER_DEPLOYMENT_ID: {{ .Values.server.deploymentId | quote }}
+
+  CORTEX_GRPC_ENABLED:         {{ .Values.grpc.enabled | quote }}
+  CORTEX_GRPC_PORT:            {{ .Values.grpc.port | quote }}
+  CORTEX_GRPC_MAX_WORKERS:     {{ .Values.grpc.maxWorkers | quote }}
+
+  CORTEX_HTTP_ENABLED:         {{ .Values.http.enabled | quote }}
+  CORTEX_HTTP_PORT:            {{ .Values.http.port | quote }}
+
+  CORTEX_REDIS_ENABLED:        {{ .Values.redis.enabled | quote }}
+  CORTEX_REDIS_URL:            {{ include "cortex.redisUrl" . | quote }}
+
+  CORTEX_METRICS_ENABLED:      {{ .Values.metrics.enabled | quote }}
+  CORTEX_METRICS_PORT:         {{ .Values.metrics.port | quote }}
+  CORTEX_TRACING_EXPORTER:     {{ .Values.tracing.exporter | quote }}
+  CORTEX_TRACING_ENDPOINT:     {{ .Values.tracing.endpoint | quote }}
+
+  CORTEX_SKIP_AUTH:            {{ .Values.security.skipAuth | quote }}
+  CORTEX_AUTH_REQUIRED:        {{ .Values.security.authRequired | quote }}
+  CORTEX_TLS_ENABLED:          {{ .Values.security.tls.enabled | quote }}
+  CORTEX_TLS_MTLS:             {{ .Values.security.tls.mtls | quote }}
+
+  CORTEX_GATE_HUMAN_OVERRIDE_THRESHOLD: {{ .Values.gate.humanOverrideThreshold | quote }}
+  CORTEX_GATE_REPLAN_THRESHOLD:         {{ .Values.gate.replanThreshold | quote }}
+  CORTEX_GATE_SENTINEL_WEIGHT:          {{ .Values.gate.sentinelWeight | quote }}
+  CORTEX_GATE_PHYSICORE_WEIGHT:         {{ .Values.gate.physicoreWeight | quote }}
+  CORTEX_GATE_MEMORY_WEIGHT:            {{ .Values.gate.memoryWeight | quote }}
+
+  CORTEX_SENTINEL_MAX_SPEED_MS:         {{ .Values.sentinel.maxSpeedMs | quote }}
+  CORTEX_SENTINEL_MAX_FORCE_N:          {{ .Values.sentinel.maxForceN | quote }}
+  CORTEX_SENTINEL_HUMAN_PROXIMITY_M:    {{ .Values.sentinel.humanProximityM | quote }}

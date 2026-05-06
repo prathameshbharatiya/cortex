@@ -1,0 +1,359 @@
+syntax = "proto3";
+
+package cortex.v1;
+
+option py_generic_services = false;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cortex Certification Service
+//
+// The primary service. Every physical AI system that uses Cortex talks
+// to this service. Four RPCs cover 100% of production usage:
+//
+//   GetContext   — assemble a validated CTX
+//   Certify      — certify an action against a CTX
+//   RecordOutcome— write execution outcome back to the tracker
+//   StreamCTX    — streaming CTX updates for high-frequency control
+// ─────────────────────────────────────────────────────────────────────────────
+service CortexCertification {
+
+  // Assemble a validated Context Packet (CTX)
+  rpc GetContext (ContextRequest) returns (ContextResponse);
+
+  // Certify an action against a context
+  rpc Certify (CertifyRequest) returns (CertificationResponse);
+
+  // Record the outcome of an executed action (closes the feedback loop)
+  rpc RecordOutcome (OutcomeRequest) returns (OutcomeResponse);
+
+  // Stream CTX updates — for systems that need continuous context
+  rpc StreamCTX (StreamContextRequest) returns (stream ContextResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cortex Management Service
+//
+// Fleet management, health, configuration, adapter status.
+// ─────────────────────────────────────────────────────────────────────────────
+service CortexManagement {
+
+  // Health check
+  rpc Health (HealthRequest) returns (HealthResponse);
+
+  // List registered memory adapters and their status
+  rpc AdapterStatus (AdapterStatusRequest) returns (AdapterStatusResponse);
+
+  // Get experience statistics
+  rpc ExperienceStats (ExperienceStatsRequest) returns (ExperienceStatsResponse);
+
+  // Trigger lifecycle maintenance
+  rpc RunMaintenance (MaintenanceRequest) returns (MaintenanceResponse);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core message types
+// ─────────────────────────────────────────────────────────────────────────────
+
+message Vec3 {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message Quaternion {
+  float w = 1;
+  float x = 2;
+  float y = 3;
+  float z = 4;
+}
+
+message Pose {
+  Vec3       position    = 1;
+  Quaternion orientation = 2;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Robot state
+// ─────────────────────────────────────────────────────────────────────────────
+
+message RobotState {
+  Vec3       ee_position    = 1;
+  Quaternion ee_orientation = 2;
+  repeated float joint_positions  = 3;
+  repeated float joint_velocities = 4;
+  repeated float joint_torques    = 5;
+  bool       gripper_open   = 6;
+  float      gripper_force_n = 7;
+  bool       emergency_stop = 8;
+  bool       in_singularity = 9;
+  bool       is_moving      = 10;
+  int64      timestamp_ms   = 11;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scene graph
+// ─────────────────────────────────────────────────────────────────────────────
+
+message DetectedObject {
+  string object_id  = 1;
+  string label      = 2;
+  Vec3   position   = 3;
+  Vec3   dimensions = 4;
+  float  confidence = 5;
+  bool   is_grasped = 6;
+  bool   is_occluded = 7;
+}
+
+message SceneGraph {
+  repeated DetectedObject objects       = 1;
+  bool     humans_nearby               = 2;
+  bool     obstruction_detected        = 3;
+  map<string, float> workspace_bounds  = 4;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Safety constraints
+// ─────────────────────────────────────────────────────────────────────────────
+
+message SafetyConstraint {
+  string constraint_id   = 1;
+  string description     = 2;
+  string constraint_type = 3;
+  map<string, float> parameters = 4;
+  bool   veto_power      = 5;
+  string source          = 6;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Action
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ActionType {
+  ACTION_TYPE_UNSPECIFIED = 0;
+  MOVE_EE                 = 1;
+  MOVE_JOINT              = 2;
+  GRASP                   = 3;
+  RELEASE                 = 4;
+  PUSH                    = 5;
+  PLACE                   = 6;
+  NAVIGATE                = 7;
+  COMPOSITE               = 8;
+  CUSTOM                  = 9;
+}
+
+message ActionConstraints {
+  float  max_speed_ms       = 1;
+  float  max_force_n        = 2;
+  float  max_torque_nm      = 3;
+  float  timeout_ms         = 4;
+  bool   abort_on_contact   = 5;
+  bool   require_confirmation = 6;
+}
+
+message ActionSpec {
+  ActionType        action_type    = 1;
+  Pose              target_pose    = 2;
+  repeated float    target_joints  = 3;
+  string            target_object_id = 4;
+  repeated Pose     trajectory     = 5;
+  ActionConstraints constraints    = 6;
+}
+
+message Action {
+  string     action_id  = 1;
+  ActionSpec spec       = 2;
+  string     source     = 3;
+  float      confidence = 4;
+  string     intent     = 5;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Context (CTX)
+// ─────────────────────────────────────────────────────────────────────────────
+
+message PhysicsHorizon {
+  int32  steps                          = 1;
+  bool   feasible                       = 2;
+  float  min_stability_margin           = 3;
+  repeated int32 collision_risk_steps   = 4;
+  repeated int32 singularity_risk_steps = 5;
+}
+
+message Context {
+  string     ctx_id              = 1;
+  string     task                = 2;
+  RobotState robot_state         = 3;
+  SceneGraph scene_graph         = 4;
+  float      memory_confidence   = 5;
+  repeated SafetyConstraint safety_constraints = 6;
+  PhysicsHorizon physics_horizon = 7;
+  float      confidence_floor    = 8;
+  float      validity_window_ms  = 9;
+  float      assembly_latency_ms = 10;
+  int64      timestamp_ms        = 11;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Certification decision
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum CertificationState {
+  CERTIFICATION_STATE_UNSPECIFIED = 0;
+  EXECUTE                         = 1;
+  EXECUTE_WITH_CONSTRAINTS        = 2;
+  REPLAN_REQUIRED                 = 3;
+  SAFE_HALT                       = 4;
+  HUMAN_OVERRIDE_REQUIRED         = 5;
+}
+
+enum RiskLevel {
+  RISK_LEVEL_UNSPECIFIED = 0;
+  RISK_NONE              = 1;
+  RISK_LOW               = 2;
+  RISK_MEDIUM            = 3;
+  RISK_HIGH              = 4;
+  RISK_CRITICAL          = 5;
+}
+
+message FailureMode {
+  string    code        = 1;
+  string    description = 2;
+  RiskLevel risk_level  = 3;
+  string    source      = 4;
+  bool      mitigable   = 5;
+}
+
+message ConfidenceContract {
+  float     success_probability  = 1;
+  float     stability_margin     = 2;
+  RiskLevel worst_case_risk      = 3;
+  repeated string uncertainty_sources = 4;
+  float     validity_window_ms   = 5;
+}
+
+message CertificationResponse {
+  string               decision_id        = 1;
+  CertificationState   state              = 2;
+  Action               action             = 3;
+  ConfidenceContract   confidence         = 4;
+  string               reason             = 5;
+  repeated FailureMode failure_modes      = 6;
+  string               trace_id           = 7;
+  float                latency_ms         = 8;
+  int64                timestamp_ms       = 9;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Request / Response messages
+// ─────────────────────────────────────────────────────────────────────────────
+
+message ContextRequest {
+  string     task          = 1;
+  RobotState robot_state   = 2;
+  SceneGraph scene_graph   = 3;
+  repeated SafetyConstraint extra_constraints = 4;
+  repeated float target_position = 5;
+  float      confidence_floor   = 6;
+  float      validity_window_ms = 7;
+  int32      top_k              = 8;
+  bool       skip_physics       = 9;
+}
+
+message ContextResponse {
+  Context  context      = 1;
+  bool     success      = 2;
+  string   error        = 3;
+  float    latency_ms   = 4;
+}
+
+message CertifyRequest {
+  Action  action  = 1;
+  string  ctx_id  = 2;    // reference to previously assembled CTX
+  Context context = 3;    // or provide CTX inline
+}
+
+message OutcomeRequest {
+  string decision_id    = 1;
+  string trace_id       = 2;
+  string ctx_id         = 3;
+  string outcome_class  = 4;   // "success" | "failure" | "partial" | ...
+  string description    = 5;
+  float  position_error_m = 6;
+  float  force_peak_n   = 7;
+  float  duration_ms    = 8;
+  bool   contact_detected = 9;
+  repeated string causal_factor_codes = 10;
+}
+
+message OutcomeResponse {
+  string experience_id = 1;
+  float  surprise_score = 2;
+  bool   success       = 3;
+  string error         = 4;
+}
+
+message StreamContextRequest {
+  string task                = 1;
+  float  update_interval_ms  = 2;   // how often to push new CTX
+  bool   skip_physics        = 3;
+}
+
+// Management messages
+message HealthRequest {}
+
+message HealthResponse {
+  bool   healthy          = 1;
+  string status           = 2;
+  int32  adapters_healthy = 3;
+  int32  adapters_total   = 4;
+  float  uptime_s         = 5;
+  string version          = 6;
+}
+
+message AdapterStatusRequest {}
+
+message AdapterStatusResponse {
+  repeated AdapterInfo adapters = 1;
+}
+
+message AdapterInfo {
+  string name         = 1;
+  string backend_type = 2;
+  int32  priority     = 3;
+  bool   healthy      = 4;
+  bool   enabled      = 5;
+  int64  reads        = 6;
+  int64  writes       = 7;
+  int64  errors       = 8;
+}
+
+message ExperienceStatsRequest {
+  string task = 1;  // empty = all tasks
+}
+
+message ExperienceStatsResponse {
+  int64  total          = 1;
+  int64  success_count  = 2;
+  int64  failure_count  = 3;
+  float  success_rate   = 4;
+  float  avg_surprise   = 5;
+  int64  high_surprise  = 6;
+}
+
+message MaintenanceRequest {
+  bool force = 1;
+}
+
+message MaintenanceResponse {
+  int32 adapters_maintained = 1;
+  int64 records_removed     = 2;
+  float latency_ms          = 3;
+}

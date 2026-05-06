@@ -1,0 +1,158 @@
+# =============================================================================
+# Cortex Helm Chart — values.yaml
+# =============================================================================
+# Override these values with:
+#   helm install cortex ./deploy/helm/cortex -f my-values.yaml
+#   helm install cortex ./deploy/helm/cortex --set server.platformId=arm_01
+# =============================================================================
+
+# ── Image ─────────────────────────────────────────────────────────────────────
+image:
+  repository: cortex
+  tag:        "latest"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# ── Replicas ──────────────────────────────────────────────────────────────────
+replicaCount: 2
+
+# ── Server identity ───────────────────────────────────────────────────────────
+server:
+  platformId:   ""
+  deploymentId: ""
+  logLevel:     INFO
+  logFormat:    json
+
+# ── gRPC transport ────────────────────────────────────────────────────────────
+grpc:
+  enabled:    true
+  port:       50051
+  maxWorkers: 20
+  service:
+    type: ClusterIP
+    port: 50051
+    # Set to LoadBalancer to expose gRPC externally
+    # type: LoadBalancer
+    annotations: {}
+
+# ── HTTP transport ────────────────────────────────────────────────────────────
+http:
+  enabled: false
+  port:    8765
+  service:
+    type: ClusterIP
+    port: 8765
+
+# ── Security ──────────────────────────────────────────────────────────────────
+security:
+  # API key authentication
+  skipAuth:     false
+  authRequired: true
+  # apiKeys: "cx_live_your_key"   # or inject via existingSecret
+
+  # Reference an existing secret for API keys (preferred for GitOps)
+  existingSecret: ""           # name of existing Secret with CORTEX_API_KEYS
+  existingSecretKey: "CORTEX_API_KEYS"
+
+  # TLS / mTLS
+  tls:
+    enabled: false
+    mtls:    false
+    # existingCertSecret: cortex-tls-certs
+    # certFile:  /var/cortex/certs/server.crt
+    # keyFile:   /var/cortex/certs/server.key
+    # caFile:    /var/cortex/certs/ca.crt
+
+# ── Gate thresholds ───────────────────────────────────────────────────────────
+gate:
+  humanOverrideThreshold: 0.40
+  replanThreshold:        0.55
+  sentinelWeight:         0.50
+  physicoreWeight:        0.35
+  memoryWeight:           0.15
+
+# ── Sentinel limits ───────────────────────────────────────────────────────────
+sentinel:
+  maxSpeedMs:      1.0
+  maxForceN:       80.0
+  humanProximityM: 0.5
+
+# ── Redis (sub-chart) ─────────────────────────────────────────────────────────
+redis:
+  enabled:      true
+  architecture: standalone
+  auth:
+    enabled: false   # set to true and provide password in production
+  master:
+    persistence:
+      enabled: true
+      size:    2Gi
+
+# ── External Redis (use instead of sub-chart) ─────────────────────────────────
+externalRedis:
+  enabled:  false
+  url:      "redis://my-redis:6379"
+  password: ""
+
+# ── Observability ─────────────────────────────────────────────────────────────
+metrics:
+  enabled: true
+  port:    9090
+  serviceMonitor:
+    # Set to true if Prometheus Operator is installed
+    enabled:  false
+    interval: 30s
+    labels:   {}
+
+tracing:
+  exporter:    none   # none | console | otlp
+  endpoint:    "http://otel-collector:4317"
+  serviceName: cortex
+  sampleRate:  1.0
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu:    250m
+    memory: 256Mi
+  limits:
+    cpu:    1000m
+    memory: 512Mi
+
+# ── Autoscaling ───────────────────────────────────────────────────────────────
+autoscaling:
+  enabled:                         true
+  minReplicas:                     2
+  maxReplicas:                     10
+  targetCPUUtilizationPercentage:  70
+  targetMemoryUtilizationPercentage: 80
+
+# ── Pod disruption budget ─────────────────────────────────────────────────────
+podDisruptionBudget:
+  enabled:        true
+  minAvailable:   1
+
+# ── Pod scheduling ────────────────────────────────────────────────────────────
+affinity: {}
+tolerations: []
+nodeSelector: {}
+
+# ── Service account ───────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name:   ""
+  annotations: {}
+
+# ── Pod security ──────────────────────────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser:    1000
+  runAsGroup:   1000
+  fsGroup:      1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem:   true
+  capabilities:
+    drop: ["ALL"]

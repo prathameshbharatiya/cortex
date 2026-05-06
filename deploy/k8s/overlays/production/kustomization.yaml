@@ -1,0 +1,67 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cortex
+
+bases:
+  - ../../base
+
+# Production image — pin to a specific digest in real deployments
+images:
+  - name: cortex:latest
+    newName: your-registry.io/cortex
+    newTag:  "0.1.0"
+
+# Production-specific patches
+patches:
+  # Scale to minimum 3 replicas in production
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cortex-grpc
+        namespace: cortex
+      spec:
+        replicas: 3
+    target:
+      kind: Deployment
+      name: cortex-grpc
+
+  # Increase resource limits for production load
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cortex-grpc
+        namespace: cortex
+      spec:
+        template:
+          spec:
+            containers:
+              - name: cortex-grpc
+                resources:
+                  requests:
+                    cpu:    "500m"
+                    memory: "512Mi"
+                  limits:
+                    cpu:    "2000m"
+                    memory: "1Gi"
+    target:
+      kind: Deployment
+      name: cortex-grpc
+
+# Production ConfigMap overrides
+configMapGenerator:
+  - name: cortex-config
+    behavior: merge
+    literals:
+      - CORTEX_SERVER_DEPLOYMENT_ID=production
+      - CORTEX_GRPC_MAX_WORKERS=40
+      - CORTEX_GATE_HUMAN_OVERRIDE_THRESHOLD=0.45
+      - CORTEX_SENTINEL_MAX_SPEED_MS=0.8
+      - CORTEX_SENTINEL_MAX_FORCE_N=60.0
+      - CORTEX_TRACING_EXPORTER=otlp
+      - CORTEX_TRACING_ENDPOINT=http://otel-collector:4317
+
+# Production secrets are managed by Vault / External Secrets Operator.
+# DO NOT add secretGenerator here — use a GitOps-safe secret management tool.

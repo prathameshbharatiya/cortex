@@ -1,0 +1,48 @@
+---
+# ClusterIP service — stable endpoint for robots inside the cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: cortex-grpc
+  namespace: cortex
+  labels:
+    app.kubernetes.io/name: cortex
+    app.kubernetes.io/component: grpc-server
+  annotations:
+    # Tell AWS/GCP/Azure load balancers this is gRPC
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "grpc"
+spec:
+  type: ClusterIP
+  selector:
+    app: cortex-grpc
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+
+---
+# Headless service — for gRPC client-side load balancing
+# Robots use this to get all pod IPs and do their own balancing
+apiVersion: v1
+kind: Service
+metadata:
+  name: cortex-grpc-headless
+  namespace: cortex
+  labels:
+    app.kubernetes.io/name: cortex
+    app.kubernetes.io/component: grpc-server
+spec:
+  type: ClusterIP
+  clusterIP: None   # headless
+  selector:
+    app: cortex-grpc
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+      protocol: TCP

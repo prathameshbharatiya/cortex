@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cortex-config
+  namespace: cortex
+  labels:
+    app.kubernetes.io/name: cortex
+    app.kubernetes.io/component: config
+data:
+  # Server identity — override per overlay
+  CORTEX_SERVER_LOG_FORMAT:    "json"
+  CORTEX_SERVER_LOG_LEVEL:     "INFO"
+
+  # gRPC transport
+  CORTEX_GRPC_ENABLED:         "true"
+  CORTEX_GRPC_PORT:            "50051"
+  CORTEX_GRPC_MAX_WORKERS:     "20"
+
+  # HTTP transport (disabled by default — enable per overlay if needed)
+  CORTEX_HTTP_ENABLED:         "false"
+  CORTEX_HTTP_PORT:            "8765"
+
+  # Memory
+  CORTEX_REDIS_ENABLED:        "true"
+  CORTEX_REDIS_URL:            "redis://cortex-redis:6379"
+
+  # Observability
+  CORTEX_METRICS_ENABLED:      "true"
+  CORTEX_METRICS_PORT:         "9090"
+  CORTEX_TRACING_EXPORTER:     "none"
+
+  # Security — auth required, no skip
+  CORTEX_SKIP_AUTH:            "0"
+  CORTEX_AUTH_REQUIRED:        "1"
+
+  # Gate thresholds
+  CORTEX_GATE_HUMAN_OVERRIDE_THRESHOLD: "0.40"
+  CORTEX_GATE_REPLAN_THRESHOLD:         "0.55"
+
+  # Sentinel limits
+  CORTEX_SENTINEL_MAX_SPEED_MS: "1.0"
+  CORTEX_SENTINEL_MAX_FORCE_N:  "80.0"

@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cortex.fullname" . }}-grpc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cortex.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grpc-server
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cortex.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: grpc-server
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "cortex.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: grpc-server
+      annotations:
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "{{ .Values.metrics.port }}"
+        prometheus.io/path:   "/metrics"
+        {{- end }}
+        # Force pod restart on config change
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "cortex.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cortex-grpc
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["cortex-serve"]
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.grpc.port }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "cortex.fullname" . }}-config
+            {{- if .Values.security.existingSecret }}
+            - secretRef:
+                name: {{ .Values.security.existingSecret }}
+            {{- else }}
+            - secretRef:
+                name: {{ include "cortex.fullname" . }}-secrets
+            {{- end }}
+          env:
+            - name: CORTEX_SERVER_PLATFORM_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          startupProbe:
+            exec:
+              command: ["cortex-health", "--json"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["cortex-health", "--json"]
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["cortex-health", "--json"]
+            periodSeconds: 10
+            failureThreshold: 2
+            timeoutSeconds: 5
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cortex-memory
+              mountPath: /var/cortex/memory
+            {{- if .Values.security.tls.enabled }}
+            - name: tls-certs
+              mountPath: /var/cortex/certs
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cortex-memory
+          emptyDir: {}
+        {{- if .Values.security.tls.enabled }}
+        - name: tls-certs
+          secret:
+            secretName: {{ .Values.security.tls.existingCertSecret }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

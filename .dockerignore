@@ -1,0 +1,33 @@
+# Development and CI files
+.git
+.github
+.gitignore
+.venv
+.env
+.env.*
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+coverage.xml
+*.log
+
+# Tests (not needed in production image)
+tests/
+
+# Docs (not needed in production image)
+docs/
+*.md
+!README.md
+
+# Development certificates (use mounted secrets in production)
+certs/
+
+# Local config overrides
+cortex.yaml

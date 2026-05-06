@@ -1,0 +1,56 @@
+# =============================================================================
+# MANIFEST.in — Source Distribution File Inclusion Rules
+# =============================================================================
+# Controls what files are bundled into `python -m build --sdist`.
+# The wheel (binary dist) is controlled by pyproject.toml [tool.setuptools].
+#
+# Rules are evaluated in order. Later rules override earlier ones.
+# =============================================================================
+
+# ── Root-level project files ───────────────────────────────────────────────
+include LICENSE
+include README.md
+include CHANGELOG.md
+include SECURITY.md
+include pyproject.toml
+include MANIFEST.in
+
+# ── Version file ───────────────────────────────────────────────────────────
+include cortex/_version.py
+
+# ── Type marker (PEP 561) ──────────────────────────────────────────────────
+include cortex/py.typed
+
+# ── gRPC proto source (needed to regenerate pb2 files) ────────────────────
+include cortex/integration/grpc/cortex.proto
+include cortex/integration/grpc/proto/cortex.proto
+
+# ── PhysiCore config files ─────────────────────────────────────────────────
+recursive-include cortex/physicore_engine *.yaml *.json *.md
+
+# ── Examples ───────────────────────────────────────────────────────────────
+recursive-include examples *.py *.md
+
+# ── Tests (included in sdist so users can run them) ───────────────────────
+recursive-include tests *.py *.json *.yaml
+
+# ── Documentation source ───────────────────────────────────────────────────
+recursive-include docs *.md *.yaml *.png *.svg
+
+# ── Exclude build artifacts, caches, editor files ─────────────────────────
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude .DS_Store
+global-exclude .env
+global-exclude .env.*
+global-exclude *.egg-info
+prune dist
+prune build
+prune .git
+prune .github
+prune .venv
+prune .mypy_cache
+prune .ruff_cache
+prune .pytest_cache
+prune htmlcov

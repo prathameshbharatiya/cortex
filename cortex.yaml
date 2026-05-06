@@ -1,0 +1,253 @@
+# =============================================================================
+# cortex.yaml — Cortex configuration file
+# =============================================================================
+#
+# Copy this file to your project root or /etc/cortex/cortex.yaml and edit.
+# Values shown here are the defaults. Uncomment and change what you need.
+#
+# Loading priority (highest wins):
+#   1. Explicit constructor kwargs in Python
+#   2. Environment variables  CORTEX_<SECTION>_<FIELD>=value
+#   3. This file (if CORTEX_CONFIG_FILE points here, or auto-discovered)
+#   4. /etc/cortex/cortex.yaml
+#   5. Built-in defaults
+#
+# Environment variable format:
+#   CORTEX_SERVER_PLATFORM_ID=arm_east_01
+#   CORTEX_REDIS_ENABLED=true
+#   CORTEX_REDIS_URL=redis://localhost:6379
+#   CORTEX_GATE_HUMAN_OVERRIDE_THRESHOLD=0.40
+#
+# Secrets (API keys, passwords) should always be set via environment variables,
+# never committed to this file. Use the placeholder format below:
+#   api_key: ${WEAVIATE_API_KEY}   ← not yet interpolated, use env var directly
+#
+# =============================================================================
+
+
+# ── Server identity ───────────────────────────────────────────────────────────
+server:
+  # Physical platform identifier. Stamped on every DecisionTrace.
+  # Required in production — leave empty only in development.
+  platform_id: ""                     # e.g. "arm_east_01", "mobile_base_02"
+
+  # Deployment environment label. Stamped on every DecisionTrace.
+  deployment_id: ""                   # e.g. "prod", "staging", "lab"
+
+  # Log level. One of: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_level: INFO
+
+  # Log format. "text" for human-readable, "json" for structured log shipping.
+  log_format: text
+
+
+# ── gRPC transport ────────────────────────────────────────────────────────────
+grpc:
+  enabled: true
+  host: "0.0.0.0"
+  port: 50051
+  max_workers: 10
+  max_message_size_mb: 16
+  keepalive_time_s: 30
+  # Enable gRPC server reflection — useful for debugging with grpcurl.
+  reflection_enabled: false
+
+
+# ── HTTP REST transport ───────────────────────────────────────────────────────
+http:
+  # Disabled by default. Enable if you need the REST API.
+  enabled: false
+  host: "0.0.0.0"
+  port: 8765
+  workers: 4
+  # CORS origins. Empty list disables CORS.
+  cors_origins: []
+  request_timeout_s: 5.0
+
+
+# ── Certification Gate ────────────────────────────────────────────────────────
+# These thresholds determine how conservative Cortex is.
+# Raise thresholds to escalate to humans more often.
+# Lower thresholds to trust the system more (use with caution).
+gate:
+  # Composite confidence below this → HUMAN_OVERRIDE_REQUIRED
+  human_override_threshold: 0.35      # range: 0.0–1.0
+
+  # Composite confidence below this → REPLAN_REQUIRED
+  # Must be greater than human_override_threshold.
+  replan_threshold: 0.50              # range: 0.0–1.0
+
+  # Validator weights in the composite confidence score.
+  # Must sum to 1.0.
+  sentinel_weight:  0.50
+  physicore_weight: 0.35
+  memory_weight:    0.15
+
+
+# ── Sentinel validator (safety limits) ───────────────────────────────────────
+# Sentinel has absolute veto power regardless of confidence score.
+sentinel:
+  # Maximum allowed end-effector speed (m/s).
+  # Actions requesting higher speed are rejected.
+  max_speed_ms: 2.0
+
+  # Maximum allowed end-effector force (N).
+  max_force_n: 150.0
+
+  # Minimum safe distance to detected humans (metres).
+  # Detections closer than this trigger L6 jerk-limiting.
+  human_proximity_m: 0.5
+
+
+# ── PhysiCore validator (physics) ────────────────────────────────────────────
+physicore:
+  # Minimum Lyapunov stability margin.
+  # Actions producing margins below this are rejected.
+  min_stability_margin: 0.10          # range: 0.0–1.0
+
+  # RK4 integration steps in the physics horizon lookahead.
+  lookahead_steps: 12
+
+  # Remote PhysiCore server URL. If set, physics validation is
+  # delegated to a running PhysiCore API server.
+  # If null/unset, a local simulation is used.
+  remote_url: null                    # e.g. "http://physicore:8000"
+  remote_timeout_s: 0.05             # must be << 16ms for 60Hz operation
+
+
+# ── Context engine ────────────────────────────────────────────────────────────
+context:
+  # Maximum memory records retrieved per certification call.
+  default_top_k: 10
+
+  # Minimum overall CTX confidence.
+  # Below this the context is marked degraded.
+  confidence_floor: 0.60             # range: 0.0–1.0
+
+
+# ── Security & access control ─────────────────────────────────────────────────
+
+security:
+  # API key authentication
+  # Generate keys with: cortex-keygen
+  # Set via env var instead of this file:  export CORTEX_API_KEYS=cx_live_...
+  # api_keys: ""
+
+  # Set to true to disable authentication (local development ONLY)
+  skip_auth: false
+
+  # Set to true to reject all requests when no keys are configured (fail closed)
+  auth_required: false
+
+  # TLS / mTLS
+  # Generate dev certs with: cortex-gen-certs --robots arm_east_01
+  tls_enabled: false
+  mtls_enabled: false
+  # tls_cert_file: /var/cortex/certs/server.crt
+  # tls_key_file:  /var/cortex/certs/server.key
+  # tls_ca_file:   /var/cortex/certs/ca.crt
+
+
+# ── Observability ─────────────────────────────────────────────────────────────
+
+# Prometheus metrics server (separate from gRPC/HTTP)
+metrics:
+  # Start a /metrics HTTP server that Prometheus can scrape.
+  enabled: false
+  host: "0.0.0.0"
+  port: 9090
+
+# OpenTelemetry distributed tracing
+tracing:
+  # Exporter backend. One of: none, console, otlp
+  # "none"    — disable tracing (default)
+  # "console" — print spans to stdout (development)
+  # "otlp"    — send to OTLP collector (Jaeger, Tempo, Datadog, etc.)
+  exporter: none
+  endpoint: "http://localhost:4317"
+  service_name: "cortex"
+  # Fraction of traces to sample. 1.0 = 100%, 0.1 = 10%.
+  sample_rate: 1.0
+
+
+# ── Memory adapters ───────────────────────────────────────────────────────────
+# L1: in-memory is always active and cannot be disabled.
+# Enable additional adapters for persistence and scale.
+
+# L2: JSON file persistence (single-robot, no Redis)
+persist:
+  enabled: false
+  path: "./cortex_memory.json"
+
+# L3: Redis (recommended for production — low latency, multi-robot)
+redis:
+  enabled: false
+  url: "redis://localhost:6379"
+  db: 0
+  ttl_seconds: 3600                  # records expire after 1 hour
+  # password: ""                     # set via CORTEX_REDIS_PASSWORD env var
+  pool_size: 10
+
+# L4: Weaviate (semantic vector search — large memory stores)
+weaviate:
+  enabled: false
+  url: "http://localhost:8080"
+  # api_key: ""                      # set via CORTEX_WEAVIATE_API_KEY env var
+
+# L5: Mem0 (managed memory API)
+mem0:
+  enabled: false
+  # api_key: ""                      # REQUIRED. Set via CORTEX_MEM0_API_KEY env var
+  # base_url: null                   # for self-hosted Mem0
+
+
+# ── Memory lifecycle ──────────────────────────────────────────────────────────
+lifecycle:
+  enabled: true
+
+  # Confidence decay
+  decay_enabled: true
+  decay_check_interval_s: 300        # check every 5 minutes
+  decay_confidence_floor: 0.10       # archive records below this confidence
+
+  # Forgetting
+  forgetting_enabled: true
+  forgetting_window_s: 604800        # 7 days
+  hard_delete_after_s: 2592000       # 30 days
+
+  # Maintenance
+  maintenance_interval_s: 600        # full maintenance every 10 minutes
+  max_records_per_adapter: 50000     # compress above this count
+
+
+# =============================================================================
+# Example: production robot deployment
+# =============================================================================
+#
+# server:
+#   platform_id: arm_east_01
+#   deployment_id: prod
+#   log_level: INFO
+#   log_format: json
+#
+# grpc:
+#   enabled: true
+#   port: 50051
+#   max_workers: 20
+#
+# gate:
+#   human_override_threshold: 0.40   # more conservative in production
+#   replan_threshold: 0.55
+#
+# sentinel:
+#   max_speed_ms: 1.0                # slower in production
+#   max_force_n: 80.0
+#
+# redis:
+#   enabled: true
+#   url: redis://prod-redis:6379
+#   ttl_seconds: 7200
+#
+# lifecycle:
+#   maintenance_interval_s: 300      # more frequent in production
+# =============================================================================

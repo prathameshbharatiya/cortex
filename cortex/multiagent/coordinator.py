@@ -443,3 +443,7 @@ class AgentCoordinator:
 
 def _euclidean(a: Sequence[float], b: Sequence[float]) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
+
+# Public alias — canonical name used by external callers
+MultiAgentCoordinator = AgentCoordinator

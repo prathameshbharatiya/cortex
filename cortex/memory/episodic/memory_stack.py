@@ -233,3 +233,7 @@ class EpisodicMemoryStack:
                 key = ep.outcome.value
                 stats[key] = stats.get(key, 0) + 1
         return stats
+
+
+# Public alias — canonical name used by external callers
+HierarchicalEpisodicStack = EpisodicMemoryStack

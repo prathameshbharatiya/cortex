@@ -607,7 +607,7 @@ class PhysiCore:
                             control_hz=control_hz,initial_params=initial_params or {})
         if platform in ('quadrotor','satellite','fixed_wing','evtol','manipulator_arm',
                         'surgical_robot','legged_robot','rocket','ground_rover'):
-            cfg.cem_samples=6; cfg.horizon=5; cfg.cem_iters=2
+            cfg.cem_samples=4; cfg.horizon=3; cfg.cem_iters=1
         if initial_params is None: initial_params={"mass":1.0,"friction":0.3,"inertia":0.1}
         if Q is None: Q=np.eye(state_dim)*cfg.q_scale
         if R is None: R=np.eye(action_dim)*cfg.r_scale

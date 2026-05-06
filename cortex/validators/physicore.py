@@ -159,14 +159,48 @@ class PhysiCoreValidator:
     def _physicore_path(
         self, action: Action, ctx: Context, t0: float
     ) -> ValidationResult:
+        # ── Pre-checks shared with analytic path ──────────────────────────────
+        # Check these before running the expensive MPC engine so failures
+        # that are deterministically blocked don't pay the CEM cost.
+
+        # Physics horizon pre-check — respect planning module's feasibility
+        if ctx.physics_horizon is not None and not ctx.physics_horizon.feasible:
+            h = ctx.physics_horizon
+            return ValidationResult(
+                passed=False, score=0.0,
+                failure_modes=[FailureMode(
+                    code="physics_horizon_infeasible",
+                    description=f"Physics horizon infeasible | collision_steps={h.collision_risk_steps}",
+                    risk_level=RiskLevel.HIGH, source="physicore",
+                    mitigable=len(h.collision_risk_steps) == 0,
+                )],
+                latency_ms=(time.perf_counter() - t0) * 1000,
+                notes="Physics horizon infeasible (pre-check)",
+            )
+
+        # Workspace reachability pre-check
+        target = action.spec.target_pose
+        if target is not None:
+            dist = float(np.linalg.norm(np.array([target.x, target.y, target.z])))
+            if dist > self.workspace_radius_m:
+                return ValidationResult(
+                    passed=False, score=0.0,
+                    failure_modes=[FailureMode(
+                        code="target_unreachable",
+                        description=f"Target dist {dist:.3f}m > workspace {self.workspace_radius_m:.3f}m",
+                        risk_level=RiskLevel.HIGH, source="physicore", mitigable=False,
+                    )],
+                    latency_ms=(time.perf_counter() - t0) * 1000,
+                    notes="Unreachable target (pre-check)",
+                )
+
         rs    = ctx.robot_state
         state = self._build_state(rs, self._engine.cfg.state_dim)
         x_ref = state.copy()
 
         # Target pose as reference state
-        if action.spec.target_pose:
-            p = action.spec.target_pose
-            x_ref[:3] = [p.x, p.y, p.z]
+        if target is not None:
+            x_ref[:3] = [target.x, target.y, target.z]
 
         try:
             ctrl: ControlStep = self._engine.step(state, x_ref)

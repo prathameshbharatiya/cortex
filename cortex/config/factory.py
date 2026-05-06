@@ -29,6 +29,7 @@ from cortex.gate.certification  import CertificationGate
 from cortex.context.engine      import ContextEngine
 from cortex.memory.gateway      import MemoryGateway
 from cortex.memory.adapters     import InMemoryAdapter, JSONFileAdapter, RedisAdapter
+from cortex.memory.adapters.episodic_adapter import EpisodicAdapter
 from cortex.experience.tracker  import ExperienceTracker
 from cortex.experience.lifecycle import LifecycleManager, LifecycleConfig
 from cortex.validators.sentinel  import SentinelValidator
@@ -154,6 +155,10 @@ def _build_gateway(cfg: CortexSettings) -> MemoryGateway:
     # L1 — always present, in-memory
     gateway.register(InMemoryAdapter(name="l1_cache"), priority=1)
     log.info("  memory adapter : InMemory (L1, always on)")
+
+    # L2 — episodic memory (geometry stack + causal graph, always on)
+    gateway.register(EpisodicAdapter(), priority=5)
+    log.info("  memory adapter : Episodic (L2, geometry + causal graph)")
 
     # L2 — JSON file persistence (optional)
     if cfg.persist.enabled:
